@@ -1,5 +1,6 @@
 import { ProductRepository } from '../repositories/product.repository';
 import { GroupRepository } from '../repositories/group.repository';
+import { NotFoundError } from '../errors/custom-errors';
 
 export class ProductService {
   private productRepository: ProductRepository;
@@ -10,14 +11,14 @@ export class ProductService {
     this.groupRepository = new GroupRepository();
   }
 
-  async getAllProducts() {
-    return await this.productRepository.findAll();
+  async getAllProducts(page?: number, limit?: number) {
+    return await this.productRepository.findAll(page, limit);
   }
 
   async getProductById(id: number) {
     const product = await this.productRepository.findById(id);
     if (!product) {
-      throw new Error('Product not found');
+      throw new NotFoundError('Product not found');
     }
     return product;
   }
@@ -29,8 +30,14 @@ export class ProductService {
     stock: number;
     groupId?: number;
   }) {
-    // PROBLEMA INTENCIONAL: Não valida se grupo existe quando groupId é fornecido
-    // PROBLEMA INTENCIONAL: Não valida se price é negativo
+    // CORRIGIDO #11: Valida se grupo existe quando groupId é fornecido
+    if (data.groupId) {
+      const group = await this.groupRepository.findById(data.groupId);
+      if (!group) {
+        throw new NotFoundError('Group not found');
+      }
+    }
+
     return await this.productRepository.create(data);
   }
 
@@ -43,10 +50,10 @@ export class ProductService {
   }>) {
     const product = await this.productRepository.findById(id);
     if (!product) {
-      throw new Error('Product not found');
+      throw new NotFoundError('Product not found');
     }
 
-    // PROBLEMA INTENCIONAL: Permite atualizar estoque para negativo
+    // CORRIGIDO #6: Validação de estoque não negativo feita no validator
     return await this.productRepository.update(id, data);
   }
 
@@ -55,7 +62,7 @@ export class ProductService {
   }
 
   async searchProducts(searchTerm: string) {
-    // PROBLEMA INTENCIONAL: Usa método com SQL injection potencial
+    // CORRIGIDO #1: SQL Injection corrigida no repository com query parametrizada
     return await this.productRepository.searchByName(searchTerm);
   }
 
