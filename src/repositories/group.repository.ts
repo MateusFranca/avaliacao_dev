@@ -3,12 +3,19 @@ import { groups, userGroups, users } from '../database/schema';
 import { eq } from 'drizzle-orm';
 
 export class GroupRepository {
-  async findAll() {
-    return await db.select().from(groups);
+  // CORRIGIDO #17: Paginação implementada
+  async findAll(page: number = 1, limit: number = 50) {
+    const offset = (page - 1) * limit;
+    return await db.select().from(groups).limit(limit).offset(offset);
   }
 
   async findById(id: number) {
     const result = await db.select().from(groups).where(eq(groups.id, id));
+    return result[0];
+  }
+
+  async findByName(name: string) {
+    const result = await db.select().from(groups).where(eq(groups.name, name));
     return result[0];
   }
 
@@ -34,21 +41,20 @@ export class GroupRepository {
   }
 
   async getGroupUsers(groupId: number) {
-    const userGroupRecords = await db
-      .select()
-      .from(userGroups)
+    // CORRIGIDO #16: Usando JOIN para evitar N+1 query problem + #3: Removendo password
+    return await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        active: users.active,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .innerJoin(userGroups, eq(users.id, userGroups.userId))
       .where(eq(userGroups.groupId, groupId));
-
-    const userIds = userGroupRecords.map(ug => ug.userId);
-    
-    // PROBLEMA INTENCIONAL: N+1 Query Problem
-    const groupUsers = [];
-    for (const userId of userIds) {
-      const user = await db.select().from(users).where(eq(users.id, userId));
-      groupUsers.push(user[0]);
-    }
-    
-    return groupUsers;
   }
 }
 
