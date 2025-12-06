@@ -7,7 +7,16 @@ export const validate = (schema: ZodSchema) => {
       schema.parse(req.body);
       next();
     } catch (error: any) {
-      // PROBLEMA INTENCIONAL: Não trata adequadamente erros de validação
+      // CORRIGIDO #19: Retorna detalhes de validação do Zod
+      if (error.errors) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: error.errors.map((e: any) => ({
+            field: e.path.join('.'),
+            message: e.message,
+          })),
+        });
+      }
       res.status(400).json({ error: 'Validation error' });
     }
   };
