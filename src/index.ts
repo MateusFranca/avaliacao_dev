@@ -1,5 +1,8 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
+import cors from 'cors';
+import helmet from 'helmet';
 import userRoutes from './routes/user.routes';
 import groupRoutes from './routes/group.routes';
 import productRoutes from './routes/product.routes';
@@ -8,7 +11,27 @@ import { errorHandler } from './middleware/error.middleware';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
+
+// CORRIGIDO #21: Configurar security headers com Helmet
+app.use(helmet());
+
+// CORRIGIDO #21: Configurar CORS
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || 'http://localhost:3001',
+  credentials: true,
+}));
+
+// CORRIGIDO #20: Configurar Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/', limiter);
 
 app.use(express.json());
 
