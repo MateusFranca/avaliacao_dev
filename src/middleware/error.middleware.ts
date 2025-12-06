@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { NotFoundError, ConflictError, ValidationError, BadRequestError } from '../errors/custom-errors';
 
 export const errorHandler = (
   err: Error,
@@ -6,11 +7,28 @@ export const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
-  // PROBLEMA INTENCIONAL: Expõe detalhes do erro em produção
+  // CORRIGIDO #18: Mensagens genéricas em produção + códigos HTTP apropriados
   console.error(err);
-  res.status(500).json({
-    error: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+  const isDevelopment = process.env.NODE_ENV === 'development';
+
+  // Determinar status code baseado no tipo de erro
+  let statusCode = 500;
+  let errorMessage = isDevelopment ? err.message : 'Internal server error';
+
+  if (err instanceof NotFoundError) {
+    statusCode = 404;
+    errorMessage = err.message;
+  } else if (err instanceof ConflictError) {
+    statusCode = 409;
+    errorMessage = err.message;
+  } else if (err instanceof ValidationError || err instanceof BadRequestError) {
+    statusCode = 400;
+    errorMessage = err.message;
+  }
+
+  res.status(statusCode).json({
+    error: errorMessage,
+    ...(isDevelopment && { stack: err.stack }),
   });
 };
 
