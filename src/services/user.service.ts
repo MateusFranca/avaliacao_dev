@@ -1,5 +1,6 @@
 import { UserRepository } from '../repositories/user.repository';
 import bcrypt from 'bcryptjs';
+import { NotFoundError, ConflictError } from '../errors/custom-errors';
 
 export class UserService {
   private userRepository: UserRepository;
@@ -8,14 +9,14 @@ export class UserService {
     this.userRepository = new UserRepository();
   }
 
-  async getAllUsers() {
-    return await this.userRepository.findAll();
+  async getAllUsers(page?: number, limit?: number) {
+    return await this.userRepository.findAll(page, limit);
   }
 
   async getUserById(id: number) {
     const user = await this.userRepository.findById(id);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundError('User not found');
     }
     return user;
   }
@@ -26,9 +27,14 @@ export class UserService {
     password: string;
     role?: string;
   }) {
-    // PROBLEMA INTENCIONAL: Falta validação de email duplicado antes de criar
+    // CORRIGIDO #4: Valida se email já existe
+    const existingUser = await this.userRepository.findByEmail(data.email);
+    if (existingUser) {
+      throw new ConflictError('Email already in use');
+    }
+
     const hashedPassword = await bcrypt.hash(data.password, 10);
-    
+
     return await this.userRepository.create({
       ...data,
       password: hashedPassword,
@@ -44,10 +50,18 @@ export class UserService {
   }>) {
     const user = await this.userRepository.findById(id);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundError('User not found');
     }
 
-    // PROBLEMA INTENCIONAL: Permite atualizar senha sem hash
+    // CORRIGIDO #8: Valida se email já está em uso por outro usuário
+    if (data.email && data.email !== user.email) {
+      const existingUser = await this.userRepository.findByEmail(data.email);
+      if (existingUser) {
+        throw new ConflictError('Email already in use');
+      }
+    }
+
+    // Hash de senha
     if (data.password) {
       data.password = await bcrypt.hash(data.password, 10);
     }
@@ -56,7 +70,11 @@ export class UserService {
   }
 
   async deleteUser(id: number) {
-    // PROBLEMA INTENCIONAL: Não verifica se usuário existe antes de deletar
+    // CORRIGIDO #13: Verifica se usuário existe antes de deletar
+    const user = await this.userRepository.findById(id);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
     await this.userRepository.delete(id);
   }
 
@@ -65,7 +83,20 @@ export class UserService {
   }
 
   async addUserToGroup(userId: number, groupId: number) {
-    // PROBLEMA INTENCIONAL: Não valida se usuário ou grupo existem
+    // CORRIGIDO #12: Valida se usuário e grupo existem
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    // Precisamos do GroupRepository para validar o grupo
+    const { GroupRepository } = await import('../repositories/group.repository');
+    const groupRepository = new GroupRepository();
+    const group = await groupRepository.findById(groupId);
+    if (!group) {
+      throw new NotFoundError('Group not found');
+    }
+
     return await this.userRepository.addUserToGroup(userId, groupId);
   }
 
