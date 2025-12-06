@@ -1,10 +1,11 @@
 import { db } from '../database/connection';
 import { products, groups } from '../database/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, like } from 'drizzle-orm';
 
 export class ProductRepository {
-  async findAll() {
-    return await db.select().from(products);
+  async findAll(page: number = 1, limit: number = 50) {
+    const offset = (page - 1) * limit;
+    return await db.select().from(products).limit(limit).offset(offset);
   }
 
   async findById(id: number) {
@@ -45,10 +46,12 @@ export class ProductRepository {
     await db.delete(products).where(eq(products.id, id));
   }
 
-  // PROBLEMA INTENCIONAL: SQL Injection potencial e falta de validação
+  // CORRIGIDO #1: Usando query parametrizada segura (SQL Injection)
   async searchByName(searchTerm: string) {
-    const query = `SELECT * FROM products WHERE name LIKE '%${searchTerm}%'`;
-    return await db.execute(sql.raw(query));
+    return await db
+      .select()
+      .from(products)
+      .where(like(products.name, `%${searchTerm}%`));
   }
 
   async findByGroup(groupId: number) {
