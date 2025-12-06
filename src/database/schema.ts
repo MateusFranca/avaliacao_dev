@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, timestamp, integer, boolean, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, text, timestamp, integer, boolean, pgEnum, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 export const userRoleEnum = pgEnum('user_role', ['admin', 'user', 'viewer']);
@@ -22,13 +22,18 @@ export const groups = pgTable('groups', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+// CORRIGIDO #22: Adicionados índices em Foreign Keys + constraint única
 export const userGroups = pgTable('user_groups', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id),
   groupId: integer('group_id').references(() => groups.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  userIdIdx: index('user_groups_user_id_idx').on(table.userId),
+  groupIdIdx: index('user_groups_group_id_idx').on(table.groupId),
+}));
 
+// CORRIGIDO #22: Adicionado índice em Foreign Key
 export const products = pgTable('products', {
   id: serial('id').primaryKey(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -38,7 +43,9 @@ export const products = pgTable('products', {
   groupId: integer('group_id').references(() => groups.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  groupIdIdx: index('products_group_id_idx').on(table.groupId),
+}));
 
 export const usersRelations = relations(users, ({ many }) => ({
   userGroups: many(userGroups),
