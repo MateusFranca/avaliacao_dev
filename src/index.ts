@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import helmet from 'helmet';
+import authRoutes from './routes/auth.routes';
 import userRoutes from './routes/user.routes';
 import groupRoutes from './routes/group.routes';
 import productRoutes from './routes/product.routes';
@@ -35,6 +36,10 @@ app.use('/api/', limiter);
 
 app.use(express.json());
 
+// CORRIGIDO #23: Rota pública de autenticação
+app.use('/api/auth', authRoutes);
+
+// CORRIGIDO #23: Rotas protegidas com JWT (middlewares aplicados nos arquivos de rota)
 app.use('/api/users', userRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/products', productRoutes);

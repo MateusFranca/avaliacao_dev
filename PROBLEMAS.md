@@ -2,7 +2,7 @@
 
 Este documento lista todos os problemas encontrados durante a avaliação técnica do código.
 
-**Total de problemas identificados**: 22 problemas reais + 3 melhorias
+**Total de problemas identificados**: 23 problemas reais + 3 melhorias
 **Metodologia**: Análise baseada em OWASP Top 10 (2021) e boas práticas de desenvolvimento
 
 ---
@@ -835,14 +835,212 @@ export const userGroups = pgTable('user_groups', {
 
 ---
 
+## Problema #23: Ausência Total de Autenticação e Autorização
+
+**Localização**: Todo o projeto (rotas desprotegidas)
+
+**Categoria**: Segurança (CRÍTICO - OWASP A01:2021)
+
+**Descrição**:
+A API não possui NENHUM mecanismo de autenticação ou autorização implementado, apesar de ter `JWT_SECRET` configurado no `.env.example` e a estrutura de usuários com `email`, `password` e `role` (admin/user/viewer).
+
+Todas as rotas da API estão completamente públicas e acessíveis sem qualquer validação de identidade:
+- Qualquer pessoa pode listar todos os usuários (`GET /api/users`)
+- Qualquer pessoa pode criar usuários com role admin (`POST /api/users`)
+- Qualquer pessoa pode deletar qualquer usuário/grupo/produto
+- O sistema de roles (admin, user, viewer) não tem nenhuma aplicação prática
+
+**Por que é um problema**:
+Esta é a vulnerabilidade mais crítica da OWASP Top 10 (2021) - **A01: Broken Access Control**. Sem autenticação, não há como:
+- Identificar quem está fazendo requisições
+- Controlar quem pode acessar/modificar recursos
+- Implementar permissões baseadas em roles
+- Auditar ações dos usuários
+- Proteger dados sensíveis
+
+**Impacto**:
+- **CRÍTICO**: Qualquer pessoa pode criar conta admin e ter controle total do sistema
+- **CRÍTICO**: Dados de todos os usuários expostos publicamente
+- **CRÍTICO**: Operações destrutivas (DELETE) sem nenhuma proteção
+- **CRÍTICO**: Impossível rastrear quem fez o quê no sistema
+- Violação de LGPD/GDPR ao expor dados pessoais sem controle de acesso
+- Sistema de roles completamente inútil sem enforcement
+
+**Solução aplicada**:
+
+### 1. Instalação de Dependências:
+```bash
+npm install jsonwebtoken
+npm install --save-dev @types/jsonwebtoken
+```
+
+### 2. Arquivos Criados:
+
+**`src/types/express.d.ts`** - Tipos TypeScript para req.user:
+```typescript
+declare global {
+  namespace Express {
+    export interface Request {
+      user?: {
+        userId: number;
+        email: string;
+        role: string;
+      };
+    }
+  }
+}
+```
+
+**`src/middleware/auth.middleware.ts`** - Middleware de autenticação JWT:
+```typescript
+export const authenticateToken = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Access token is required' });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(401).json({ error: 'Invalid token' });
+    req.user = decoded;
+    next();
+  });
+};
+```
+
+**`src/middleware/authorization.middleware.ts`** - Middleware de autorização por roles:
+```typescript
+export const authorizeRoles = (allowedRoles: string[]) => {
+  return (req, res, next) => {
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+};
+
+export const authorizeOwnerOrAdmin = (req, res, next) => {
+  const userId = parseInt(req.params.id);
+  if (req.user.userId === userId || req.user.role === 'admin') {
+    return next();
+  }
+  res.status(403).json({ error: 'You can only access your own data' });
+};
+```
+
+**`src/validators/auth.validator.ts`** - Validação de login:
+```typescript
+export const loginSchema = z.object({
+  email: z.string().email().max(255),
+  password: z.string().min(1),
+});
+```
+
+**`src/services/auth.service.ts`** - Serviço de autenticação:
+```typescript
+async login(email: string, password: string) {
+  const user = await this.userRepository.findByEmail(email);
+  if (!user || !user.active) {
+    throw new BadRequestError('Invalid email or password');
+  }
+
+  const isPasswordValid = await bcrypt.compare(password, user.password);
+  if (!isPasswordValid) {
+    throw new BadRequestError('Invalid email or password');
+  }
+
+  const token = jwt.sign(
+    { userId: user.id, email: user.email, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+  );
+
+  return { token, user: { id, name, email, role } };
+}
+```
+
+**`src/controllers/auth.controller.ts`** - Controller de autenticação
+**`src/routes/auth.routes.ts`** - Rota de login (`POST /api/auth/login`)
+
+### 3. Rotas Protegidas:
+
+**`src/routes/user.routes.ts`**:
+```typescript
+router.get('/', authenticateToken, authorizeRoles(['admin', 'viewer']), ...);
+router.get('/:id', authenticateToken, authorizeOwnerOrAdmin, ...);
+router.post('/', validate(createUserSchema), ...); // Público para cadastro
+router.put('/:id', authenticateToken, authorizeOwnerOrAdmin, ...);
+router.delete('/:id', authenticateToken, authorizeRoles(['admin']), ...);
+```
+
+**`src/routes/group.routes.ts`**:
+```typescript
+router.get('/', authenticateToken, ...);
+router.post('/', authenticateToken, authorizeRoles(['admin']), ...);
+router.put('/:id', authenticateToken, authorizeRoles(['admin']), ...);
+router.delete('/:id', authenticateToken, authorizeRoles(['admin']), ...);
+```
+
+**`src/routes/product.routes.ts`**:
+```typescript
+router.get('/', authenticateToken, ...);
+router.post('/', authenticateToken, authorizeRoles(['admin', 'user']), ...);
+router.put('/:id', authenticateToken, authorizeRoles(['admin', 'user']), ...);
+router.delete('/:id', authenticateToken, authorizeRoles(['admin']), ...);
+```
+
+### 4. Configuração Atualizada:
+
+**`src/index.ts`**:
+```typescript
+import authRoutes from './routes/auth.routes';
+
+app.use('/api/auth', authRoutes); // Rota pública de login
+app.use('/api/users', userRoutes); // Rotas protegidas com JWT
+```
+
+**`.env.example`**:
+```
+JWT_SECRET=seu_secret_aqui_minimo_32_caracteres_para_seguranca
+JWT_EXPIRES_IN=24h
+NODE_ENV=development
+```
+
+### 5. Fluxo de Autenticação:
+
+1. **Login**: `POST /api/auth/login` com `{ email, password }`
+2. **Validação**: Verifica credenciais com bcrypt e se usuário está ativo
+3. **Token**: Retorna JWT assinado com `{ userId, email, role }`
+4. **Uso**: Cliente envia `Authorization: Bearer <token>` em requisições
+5. **Verificação**: Middleware valida token e adiciona `req.user`
+6. **Autorização**: Middleware verifica se role tem permissão
+
+### 6. Matriz de Permissões Implementada:
+
+| Endpoint | Público | Viewer | User | Admin |
+|----------|---------|--------|------|-------|
+| POST /api/auth/login | ✅ | ✅ | ✅ | ✅ |
+| POST /api/users | ✅ | ✅ | ✅ | ✅ |
+| GET /api/users | ❌ | ✅ | ❌ | ✅ |
+| GET /api/users/:id | ❌ | Own | Own | ✅ |
+| PUT /api/users/:id | ❌ | Own | Own | ✅ |
+| DELETE /api/users/:id | ❌ | ❌ | ❌ | ✅ |
+| GET /api/groups | ❌ | ✅ | ✅ | ✅ |
+| POST/PUT/DELETE /api/groups | ❌ | ❌ | ❌ | ✅ |
+| GET /api/products | ❌ | ✅ | ✅ | ✅ |
+| POST/PUT /api/products | ❌ | ❌ | ✅ | ✅ |
+| DELETE /api/products | ❌ | ❌ | ❌ | ✅ |
+
+**Status**: ✅ IMPLEMENTADO COMPLETAMENTE
+
+---
+
 ## 📊 Resumo de Problemas por Categoria
 
-### Segurança (5 problemas)
+### Segurança (6 problemas)
 - #1: SQL Injection (CRÍTICO)
 - #2: Exposição de informações sensíveis
 - #3: Senhas retornadas em queries (CRÍTICO)
 - #10: Senha fraca
 - #20: Falta de rate limiting
+- #23: Ausência de autenticação/autorização (CRÍTICO)
 
 ### Performance (3 problemas)
 - #16: N+1 Query Problem (CRÍTICO)
@@ -879,6 +1077,7 @@ export const userGroups = pgTable('user_groups', {
 - [x] Corrigir N+1 queries (#16) - PRIORIDADE MÁXIMA ✅ IMPLEMENTADO
 - [x] Implementar paginação (#17) - PRIORIDADE MÁXIMA ✅ IMPLEMENTADO
 - [x] Verificar FK antes de delete grupo (#15) - PRIORIDADE MÁXIMA ✅ IMPLEMENTADO
+- [x] **Implementar autenticação JWT (#23) - PRIORIDADE MÁXIMA ✅ IMPLEMENTADO**
 - [x] Sanitizar mensagens de erro (#2) - PRIORIDADE ALTA ✅ IMPLEMENTADO
 - [x] Adicionar validações de negócio (#4, #11, #12, #13, #14) - PRIORIDADE ALTA ✅ IMPLEMENTADO
 - [x] Validar valores positivos (#5, #6) - PRIORIDADE ALTA ✅ IMPLEMENTADO
@@ -896,12 +1095,22 @@ export const userGroups = pgTable('user_groups', {
 - `cors` - CORS configuration
 - `helmet` - Security headers
 - `@types/cors` - TypeScript types for CORS
+- `jsonwebtoken` - JWT token generation and verification
+- `@types/jsonwebtoken` - TypeScript types for jsonwebtoken
 
 ### Arquivos Criados:
 - `src/errors/custom-errors.ts` - Classes de erro customizadas (NotFoundError, ConflictError, ValidationError, BadRequestError)
+- `src/types/express.d.ts` - Extensão de tipos TypeScript para Express Request
+- `src/middleware/auth.middleware.ts` - Middleware de autenticação JWT
+- `src/middleware/authorization.middleware.ts` - Middleware de autorização por roles
+- `src/validators/auth.validator.ts` - Validação de login com Zod
+- `src/services/auth.service.ts` - Lógica de autenticação e geração de tokens
+- `src/controllers/auth.controller.ts` - Controller de autenticação
+- `src/routes/auth.routes.ts` - Rotas de autenticação (login)
 
 ### Principais Alterações:
-- **Segurança**: SQL Injection corrigida, senhas removidas de queries, rate limiting implementado, CORS e Helmet configurados
+- **Segurança**: SQL Injection corrigida, senhas removidas de queries, rate limiting implementado, CORS e Helmet configurados, **autenticação JWT e autorização por roles implementados**
 - **Performance**: N+1 queries resolvidas, paginação implementada, índices adicionados em FKs
 - **Validação**: Validações completas de dados, códigos HTTP apropriados, mensagens de erro detalhadas
 - **Integridade**: Verificações de FK, validações de negócio, tratamento de erros adequado
+- **Autenticação/Autorização**: Sistema completo de JWT com matriz de permissões por role (admin/user/viewer), proteção de todas as rotas sensíveis
